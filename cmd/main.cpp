@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <locale>
 #include <array>
+#include <exception>
 
 
 using Table = std::pair<std::vector<std::string>, std::vector<std::vector<double>>>;
@@ -33,8 +34,18 @@ std::vector<T> split_parse_raw(const std::string&str) {
     sin.imbue(std::locale(sin.getloc(), new ColonAsSep)); // doesnt leak, (c) Valgrind
     std::vector<T> ret;
     T val;
-    while (sin >> val) {
-        ret.push_back(val);
+    size_t column_i = 1;
+    try {
+        while (sin >> val) {
+            ret.push_back(val);
+            column_i += 1;
+        }
+        if (!sin.eof()) {
+            throw std::runtime_error("parsing failed");
+        }
+    }
+    catch (std::exception&err) {
+        throw std::runtime_error(std::string("column ") + std::to_string(column_i) + ": " + err.what());
     }
     return ret;
 }
@@ -48,10 +59,25 @@ Table read_table(const std::string&filename) {
     if (std::string line; getline(fin, line)) {
         head = split_parse_raw<std::string>(line);
     }
+    if (head.empty()) {
+        throw std::runtime_error("table has empty head");
+    }
 
     std::string line;
+    size_t line_i = 0;
     while (std::getline(fin, line)) {
-        data.push_back(split_parse_raw<double>(line));
+        line_i += 1;
+        try {
+            auto parsed = split_parse_raw<double>(line);
+            if (parsed.size() != head.size()) {
+                throw std::runtime_error("line column size != head size");
+            }
+            data.push_back(std::move(parsed));
+        }
+        catch (std::runtime_error&err) {
+            // std::format C++23 would be lovely in here
+            throw std::runtime_error(std::string("error parsing line ") + std::to_string(line_i) + ": " + err.what());
+        }
     }
 
     return {std::move(head), std::move(data)}; // RAII?
