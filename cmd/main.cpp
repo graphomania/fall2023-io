@@ -7,6 +7,7 @@
 #include <locale>
 #include <array>
 #include <exception>
+#include <optional>
 
 
 using Table = std::pair<std::vector<std::string>, std::vector<std::vector<double>>>;
@@ -15,8 +16,7 @@ using Table = std::pair<std::vector<std::string>, std::vector<std::vector<double
 // The hack https://stackoverflow.com/a/7304184
 class ColonAsSep final : public std::ctype<char> {
 public:
-    ColonAsSep() : std::ctype<char>(ColonAsSep::get_table()) {
-    }
+    ColonAsSep() : std::ctype<char>(ColonAsSep::get_table()) {}
 
     // USE: cin.imbue(locale(cin.getloc(), &colon_as_sep));
     static mask const* get_table() {
@@ -28,8 +28,8 @@ public:
     }
 };
 
-template<typename T>
-std::vector<T> split_parse_raw(const std::string&str) {
+template <typename T>
+std::vector<T> split_parse_raw(const std::string& str) {
     std::istringstream sin(str);
     sin.imbue(std::locale(sin.getloc(), new ColonAsSep)); // doesnt leak, (c) Valgrind
     std::vector<T> ret;
@@ -43,15 +43,14 @@ std::vector<T> split_parse_raw(const std::string&str) {
         if (!sin.eof()) {
             throw std::runtime_error("parsing failed");
         }
-    }
-    catch (std::exception&err) {
+    } catch (std::exception& err) {
         throw std::runtime_error(std::string("column ") + std::to_string(column_i) + ": " + err.what());
     }
     return ret;
 }
 
 
-Table read_table(const std::string&filename) {
+Table read_table(const std::string& filename) {
     std::vector<std::string> head;
     std::vector<std::vector<double>> data;
 
@@ -73,8 +72,7 @@ Table read_table(const std::string&filename) {
                 throw std::runtime_error("line column size != head size");
             }
             data.push_back(std::move(parsed));
-        }
-        catch (std::runtime_error&err) {
+        } catch (std::runtime_error& err) {
             // std::format C++23 would be lovely in here
             throw std::runtime_error(std::string("error parsing line ") + std::to_string(line_i) + ": " + err.what());
         }
@@ -90,12 +88,12 @@ std::string left_pad(const std::string_view what, const size_t count, const char
     return std::string(count - what.size(), filler) + std::string(what);
 }
 
-void print_table(const Table&table, const size_t min_padding = 12, std::ostream&out = std::cout) {
-    const auto&[head, data] = table;
-    for (const auto&name: head) {
+void print_table(const Table& table, const size_t min_padding = 12, std::ostream& out = std::cout) {
+    const auto& [head, data] = table;
+    for (const auto& name : head) {
         out << left_pad(name, min_padding, ' ') << ' ';
     }
-    for (const auto&line: data) {
+    for (const auto& line : data) {
         out << '\n';
         for (size_t i = 0; i < line.size(); i++) {
             out << left_pad(std::to_string(line[i]), std::max(head[i].size(), min_padding), ' ') << ' ';
@@ -103,12 +101,48 @@ void print_table(const Table&table, const size_t min_padding = 12, std::ostream&
     }
 }
 
+template <typename Ret>
+std::optional<Ret> wrap(const std::function<Ret()>& func, const std::string_view reason) {
+    try {
+        auto ret = func();
+        return ret;
+    } catch (std::runtime_error& e) {
+        std::cerr << "ERROR WHILE " << reason << ": " << e.what() << '\n'; // afaik cerr flushes on \n automagically
+    } catch (std::exception& e) {
+        std::cerr << "UNEXPECTED ERROR (might be a fire) WHILE " << reason << ": " << e.what() << '\n';
+    } catch (...) {
+        std::cerr << "(VERY) UNEXPECTED ERROR (could be a fire), WHILE " << reason << '\n';
+    }
+    return {};
+}
+
 int main(const int argc, char* argv[]) {
-    std::string filename = "input.csv";
-    if (argc > 1) {
-        filename = argv[1];
+    // this is just for fun
+    auto filename = wrap<std::string>([&argc, &argv]() {
+        std::string filename = "input.csv";
+        if (argc > 1) {
+            filename = argv[1];
+        }
+        return filename;
+    }, "opening file");
+    if (!filename.has_value()) {
+        return -1;
     }
 
-    const auto table = read_table(filename);
-    print_table(table);
+    const auto table = wrap<Table>([filename=filename.value()]() {
+        return read_table(filename);
+    }, "reading table from file");
+    if (!table.has_value()) {
+        return 1;
+    }
+
+    if (!wrap<int>([table=table.value()]() {
+            print_table(table);
+            return 0;
+        }, "printing table to stdout").
+        has_value()) {
+        return 2;
+    }
+
+    return 0;
 }
